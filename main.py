@@ -4,8 +4,7 @@ import os
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
-# Import the executor instance
-from agent import agent_executor  # Assuming you export the executor
+from agent import agent_executor
 
 
 def main():
@@ -17,7 +16,6 @@ def main():
     # Ensure TARGET_DIR is an absolute path or resolve it
     if target_dir and not os.path.isabs(target_dir):
         target_dir = os.path.abspath(target_dir)
-
 
     if not repo_url:
         raise ValueError("REPO_URL must be set in the .env file")

@@ -97,7 +97,8 @@ prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a helpful assistant that can interact with git repositories and local filesystems using provided tools. "
+            "You are a helpful assistant that can interact with git repositories and local filesystems using provided "
+            "tools."
             "You can clone repos, list directory structures, and read file contents."
         ),
         MessagesPlaceholder(variable_name="chat_history"),
@@ -114,8 +115,6 @@ agent_executor = AgentExecutor(
     agent=agent,
     tools=tools,
     verbose=True,
-    handle_parsing_errors=True  # Good practice
+    handle_parsing_errors=True
 )
 
-# Export the executor, not the raw agent
-# (You'll call agent_executor.invoke in main.py)
