@@ -10,7 +10,7 @@ from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, System
 from langchain_core.outputs import ChatResult, ChatGeneration
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
-from openai import OpenAI  # Keep using if API is compatible
+from openai import OpenAI
 
 # Import your decorated tools
 from tools import git_clone, get_directory_tree, get_file_content
