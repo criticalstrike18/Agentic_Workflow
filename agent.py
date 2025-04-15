@@ -12,7 +12,6 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
-# Import your decorated tools
 from tools import git_clone, get_directory_tree, get_file_content
 
 load_dotenv()
