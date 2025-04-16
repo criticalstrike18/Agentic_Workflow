@@ -1,4 +1,3 @@
-# simplified_ui_agent.py
 import json
 import os
 from enum import Enum
@@ -9,12 +8,17 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
-# Import tools
+# Import base tools
 from tools import git_clone, get_directory_tree, get_file_content
-from tools.autonomous_ui_tools import (
-    scan_codebase_for_ui_components,
-    analyze_ui_component,
-    regenerate_ui_component
+# Import UI enhancement tools
+from tools.ui_tools import (
+    scan_for_ui_files,
+    analyze_ui_capabilities,
+    identify_enhancement_opportunities,
+    generate_enhancement_plan,
+    modify_ui_file,
+    verify_ui_changes,
+    revert_ui_changes
 )
 
 # Load environment variables
@@ -22,7 +26,7 @@ load_dotenv()
 
 deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
 deepseek_api_base = os.getenv('DEEPSEEK_API_BASE')
-model_name = os.getenv('DEEPSEEK_MODEL', "deepseek-chat")
+model_name = os.getenv('DEEPSEEK_MODEL', "deepseek-reasoner")
 
 if not deepseek_api_key:
     raise ValueError("DEEPSEEK_API_KEY must be set")
@@ -33,314 +37,829 @@ if not deepseek_api_base:
 llm = ChatOpenAI(
     openai_api_key=deepseek_api_key,
     openai_api_base=deepseek_api_base,
-    model_name="deepseek-chat",
-    temperature=0
+    model_name=model_name,
+    temperature=0.2
 )
-
 
 # Define phases for the workflow
 class Phase(str, Enum):
     CLONE_REPO = "clone_repo"
-    SCAN_CODEBASE = "scan_codebase"
-    ANALYZE_COMPONENTS = "analyze_components"
-    ENHANCE_COMPONENTS = "enhance_components"
+    SCAN_UI_FILES = "scan_ui_files"
+    ANALYZE_UI = "analyze_ui"
+    IDENTIFY_OPPORTUNITIES = "identify_opportunities"
+    GENERATE_PLAN = "generate_plan"
+    IMPLEMENT_ENHANCEMENTS = "implement_enhancements"
+    VERIFY_CHANGES = "verify_changes"
     SUMMARIZE = "summarize"
     COMPLETE = "complete"
 
 
-# Define a simplified state type
+# Define a state type
 class State(TypedDict):
     phase: str
+    enhancement_prompt: str
     repo_url: str
     repo_dir: str
-    components: List[Dict[str, Any]]
-    current_component_index: int
-    enhanced_components: List[Dict[str, Any]]
+    ui_files: Dict[str, Any]
+    ui_analysis: Dict[str, Any]
+    primary_focus: str
+    design_approach: str
+    enhancement_opportunities: Dict[str, Any]
+    enhancement_plan: Dict[str, Any]
+    files_to_enhance: List[Dict[str, Any]]
+    current_file_index: int
+    enhanced_files: List[Dict[str, Any]]
+    verification_result: Dict[str, Any]
     summary: str
     error: Optional[str]
-
+    log: List[str]
 
 # Define the node functions
 def clone_repository(state: State) -> State:
-    """Clone the repository to a local directory."""
     try:
         repo_url = state["repo_url"]
         target_dir = os.getenv('TARGET_DIR', './enhanced_repo')
         if not os.path.isabs(target_dir):
             target_dir = os.path.abspath(target_dir)
 
-        print(f"Cloning repository: {repo_url} to {target_dir}")
+        log_message = f"Cloning repository: {repo_url} to {target_dir}"
+        print(log_message)
+
         result = git_clone.invoke({"repo_url": repo_url, "target_dir": target_dir})
         print(f"Clone result: {result}")
 
-        # Update state with new directory and proceed to next phase
+        new_log = state.get("log", []) + [log_message, f"Clone complete: {result}"]
+
         return {
             **state,
             "repo_dir": target_dir,
-            "phase": Phase.SCAN_CODEBASE
+            "phase": Phase.SCAN_UI_FILES,
+            "log": new_log
         }
     except Exception as e:
-        print(f"Error in clone_repository: {e}")
+        error_message = f"Error in clone_repository: {e}"
+        print(error_message)
         return {
             **state,
             "error": str(e),
-            "phase": Phase.COMPLETE
+            "phase": Phase.COMPLETE,
+            "log": state.get("log", []) + [error_message]
         }
 
 
-def scan_for_components(state: State) -> State:
-    """Scan the repository for UI components."""
+def scan_ui_files(state: State) -> State:
     try:
         repo_dir = state["repo_dir"]
-        print(f"Scanning for UI components in: {repo_dir}")
+        log_message = f"Scanning for UI files in: {repo_dir}"
+        print(log_message)
 
-        # Get repo structure
         directory_structure = get_directory_tree.invoke({"root_dir": repo_dir})
-        print(f"Repository structure: {directory_structure[:100]}...")
+        scan_result = scan_for_ui_files.invoke({"repo_dir": repo_dir})
+        ui_files = json.loads(scan_result)
 
-        # Scan for UI components
-        scan_result = scan_codebase_for_ui_components.invoke({"repo_dir": repo_dir})
-        scan_data = json.loads(scan_result)
+        total_files = ui_files.get("summary", {}).get("total_files", 0)
 
-        components = scan_data.get("ui_components", [])
-        print(f"Found {len(components)} UI components")
+        log_messages = [
+            log_message,
+            f"Found {total_files} UI-related files"
+        ]
+
+        for aspect, files in ui_files.get("ui_files", {}).items():
+            log_messages.append(f"- {aspect}: {len(files)} files")
+
+        print("\n".join(log_messages))
 
         return {
             **state,
-            "components": components,
-            "current_component_index": 0,
-            "phase": Phase.ANALYZE_COMPONENTS if components else Phase.SUMMARIZE
+            "ui_files": ui_files,
+            "phase": Phase.ANALYZE_UI if total_files > 0 else Phase.COMPLETE,
+            "log": state.get("log", []) + log_messages,
+            "error": None if total_files > 0 else "No UI files found"
         }
     except Exception as e:
-        print(f"Error in scan_for_components: {e}")
+        error_message = f"Error in scan_ui_files: {e}"
+        print(error_message)
         return {
             **state,
             "error": str(e),
-            "phase": Phase.COMPLETE
+            "phase": Phase.COMPLETE,
+            "log": state.get("log", []) + [error_message]
         }
 
 
-def analyze_and_enhance_component(state: State) -> State:
-    """Analyze a component, then enhance it if needed."""
+def analyze_ui(state: State) -> State:
     try:
-        components = state["components"]
-        current_index = state["current_component_index"]
         repo_dir = state["repo_dir"]
-        enhanced_components = state.get("enhanced_components", [])
+        ui_files_json = json.dumps(state["ui_files"])
 
-        # Check if we've processed all components
-        if current_index >= len(components):
-            return {
-                **state,
-                "phase": Phase.SUMMARIZE
-            }
+        log_message = "Analyzing UI capabilities..."
+        print(log_message)
 
-        # Get current component
-        component = components[current_index]
-        file_path = component["path"]
-        print(f"Processing component {current_index + 1}/{len(components)}: {file_path}")
-
-        # Analyze the component
-        analysis_result = analyze_ui_component.invoke({
+        analysis_result = analyze_ui_capabilities.invoke({
             "repo_dir": repo_dir,
-            "file_path": file_path
+            "ui_files_json": ui_files_json
         })
 
-        analysis_data = json.loads(analysis_result)
+        ui_analysis = json.loads(analysis_result)
 
-        # Get original content
-        original_content = get_file_content.invoke({
-            "repo_dir": repo_dir,
-            "relative_path": file_path
-        })
+        detected_frameworks = ui_analysis.get("framework", {}).get("detected", [])
+        framework = detected_frameworks[0] if detected_frameworks else "Unknown"
 
-        # Generate enhanced version using LLM
-        enhancement_prompt = f"""
-        I need to enhance the following UI component without any specific user direction.
-        I'll make autonomous improvements that make it more modern, visually appealing, and user-friendly.
+        ui_libs = ui_analysis.get("ui_libraries", {}).get("detected", [])
+        anim_types = ui_analysis.get("animation_system", {}).get("types", [])
 
-        File path: {file_path}
+        log_messages = [
+            log_message,
+            f"Analysis complete: Found {framework} framework with {', '.join(ui_libs) if ui_libs else 'no UI libraries'}"
+        ]
 
-        Analysis: {json.dumps(analysis_data, indent=2)}
+        if anim_types:
+            log_messages.append(f"Animation types: {', '.join(anim_types)}")
 
-        Original content:
-        ```
-        {original_content}
-        ```
+        print("\n".join(log_messages))
 
-        Generate an improved version of this component with:
-        1. Modern styling improvements
-        2. Better user experience elements
-        3. Cleaner, more maintainable code
-        4. Preserved functionality
+        return {
+            **state,
+            "ui_analysis": ui_analysis,
+            "phase": Phase.IDENTIFY_OPPORTUNITIES,
+            "log": state.get("log", []) + log_messages
+        }
+    except Exception as e:
+        error_message = f"Error in analyze_ui: {e}"
+        print(error_message)
+        return {
+            **state,
+            "error": str(e),
+            "phase": Phase.COMPLETE,
+            "log": state.get("log", []) + [error_message]
+        }
 
-        Return ONLY the complete new source code without explanation.
+
+def identify_opportunities(state: State) -> State:
+    try:
+        enhancement_prompt = state["enhancement_prompt"]
+        ui_analysis_json = json.dumps(state["ui_analysis"])
+        repo_dir = state["repo_dir"]
+
+        log_message = f"Identifying enhancement opportunities based on: '{enhancement_prompt}'"
+        print(log_message)
+
+        # Step 1: Identify the primary focus area
+        focus_prompt = f"""
+        Based on the user's enhancement directive: "{enhancement_prompt}", identify the primary UI aspect to focus on.
+        Choose a specific element or feature, such as:
+        - Color scheme
+        - Typography (fonts, text styles)
+        - Button design
+        - Layout and spacing
+        - Image and media presentation (e.g., photo grid size)
+        - Animations and transitions
+        - Form elements
+        - Navigation elements
+
+        If the directive is general, select one specific aspect that could have the most impact based on the UI analysis.
+        Return only the name of the primary aspect.
         """
 
-        enhancement_result = llm.invoke([HumanMessage(content=enhancement_prompt)])
-        new_content = enhancement_result.content
+        focus_result = llm.invoke([HumanMessage(content=focus_prompt)])
+        primary_focus = focus_result.content.strip()
 
-        # Clean the response to extract only the code
+        # Step 2: Propose a specific design approach
+        design_approach_prompt = f"""
+        For the primary focus area: {primary_focus}, propose a specific design approach or style to apply consistently across the application.
+        For example:
+        - If color scheme: Suggest a color palette (e.g., primary, secondary, accent colors with hex codes)
+        - If typography: Suggest font families, sizes, weights
+        - If button design: Suggest styles (e.g., rounded, flat, with shadows, sizes)
+        - If image and media presentation: Suggest grid sizes or layout styles
+        Provide a brief description of the proposed design approach.
+        """
+
+        design_approach_result = llm.invoke([HumanMessage(content=design_approach_prompt)])
+        design_approach = design_approach_result.content.strip()
+
+        # Step 3: Identify opportunities based on primary focus
+        refinement_prompt = f"""
+        You are a UI/UX expert analyzing a web application.
+
+        User's enhancement directive: "{enhancement_prompt}"
+
+        Primary focus area: {primary_focus}
+
+        Proposed design approach: {design_approach}
+
+        UI analysis:
+        {ui_analysis_json}
+
+        Based on the UI analysis, identify specific enhancement opportunities focused solely on {primary_focus}.
+        All opportunities should align with the proposed design approach and enhance {primary_focus} consistently across the application.
+        Consider UI/UX best practices, but limit the scope to {primary_focus}.
+
+        For each category, list concrete, specific opportunities for improvement related to {primary_focus}.
+        Be creative but practical, considering the existing framework and libraries.
+
+        Provide opportunities structured as JSON with these categories:
+        - visual_design: Visual improvements related to {primary_focus}
+        - animations: Animation enhancements (if related to {primary_focus})
+        - user_experience: UX enhancements tied to {primary_focus}
+        - prioritized_files: List of specific files to enhance, with clear reasons tied to {primary_focus}
+        """
+
+        refinement_result = llm.invoke([HumanMessage(content=refinement_prompt)])
+
+        # Extract JSON from the response
         import re
-        code_block_match = re.search(r'```(?:\w+)?\n(.*?)\n```', new_content, re.DOTALL)
-        if code_block_match:
-            new_content = code_block_match.group(1)
+        json_match = re.search(r'```json\n(.*?)\n```', refinement_result.content, re.DOTALL)
+        if json_match:
+            opportunities_json = json_match.group(1)
+        else:
+            try:
+                opportunities = json.loads(refinement_result.content)
+                opportunities_json = json.dumps(opportunities)
+            except:
+                opportunities_result = identify_enhancement_opportunities.invoke({
+                    "repo_dir": repo_dir,
+                    "ui_analysis_json": ui_analysis_json
+                })
+                opportunities_json = opportunities_result
 
-        # Apply the changes
-        regenerate_result = regenerate_ui_component.invoke({
-            "repo_dir": repo_dir,
-            "file_path": file_path,
-            "new_content": new_content,
-            "backup": True
-        })
+        try:
+            enhancement_opportunities = json.loads(opportunities_json)
+            log_messages = [
+                log_message,
+                f"Primary focus: {primary_focus}",
+                f"Design approach: {design_approach}",
+                f"Identified opportunities in categories: {', '.join(enhancement_opportunities.keys())}"
+            ]
 
-        regenerate_data = json.loads(regenerate_result)
+            for category, opps in enhancement_opportunities.items():
+                if isinstance(opps, list) and opps:
+                    if category == "prioritized_files":
+                        log_messages.append(f"- {len(opps)} files prioritized for enhancement")
+                    else:
+                        log_messages.append(f"- {category}: {len(opps)} opportunities")
 
-        # Add to enhanced components list
-        enhanced_components.append({
-            "file_path": file_path,
-            "success": regenerate_data.get("success", False),
-            "message": regenerate_data.get("message", ""),
-        })
+            print("\n".join(log_messages))
 
-        # Move to next component
-        return {
-            **state,
-            "current_component_index": current_index + 1,
-            "enhanced_components": enhanced_components,
-            "phase": Phase.ANALYZE_COMPONENTS  # Stay in the same phase for next component
-        }
-
+            return {
+                **state,
+                "primary_focus": primary_focus,
+                "design_approach": design_approach,
+                "enhancement_opportunities": enhancement_opportunities,
+                "phase": Phase.GENERATE_PLAN,
+                "log": state.get("log", []) + log_messages
+            }
+        except Exception as e:
+            error_message = f"Error parsing opportunities JSON: {e}"
+            print(error_message)
+            return {
+                **state,
+                "error": error_message,
+                "phase": Phase.COMPLETE,
+                "log": state.get("log", []) + [log_message, error_message]
+            }
     except Exception as e:
-        print(f"Error in analyze_and_enhance_component: {e}")
-        # Continue to next component even if one fails
+        error_message = f"Error in identify_opportunities: {e}"
+        print(error_message)
         return {
             **state,
-            "current_component_index": state["current_component_index"] + 1,
-            "phase": Phase.ANALYZE_COMPONENTS
+            "error": str(e),
+            "phase": Phase.COMPLETE,
+            "log": state.get("log", []) + [error_message]
         }
 
+
+def generate_plan(state: State) -> State:
+    try:
+        enhancement_prompt = state["enhancement_prompt"]
+        primary_focus = state["primary_focus"]
+        design_approach = state["design_approach"]
+        opportunities_json = json.dumps(state["enhancement_opportunities"])
+        ui_analysis_json = json.dumps(state["ui_analysis"])
+        repo_dir = state["repo_dir"]
+
+        log_message = "Generating detailed enhancement plan..."
+        print(log_message)
+
+        ui_files = state["ui_files"]
+        all_ui_files = []
+        for category, files in ui_files.get("ui_files", {}).items():
+            all_ui_files.extend(files)
+
+        existing_file_paths = [file_info["path"] for file_info in all_ui_files]
+        print(f"Found {len(existing_file_paths)} UI files that exist in the repository")
+
+        plan_prompt = f"""
+        You are a UI/UX expert creating an enhancement plan for a web application.
+
+        User's directive: "{enhancement_prompt}"
+
+        Primary focus area: {primary_focus}
+
+        Proposed design approach: {design_approach}
+
+        UI analysis:
+        {ui_analysis_json}
+
+        Enhancement opportunities:
+        {opportunities_json}
+
+        IMPORTANT: Here are the actual UI files that exist in the repository that you can modify:
+        {json.dumps(existing_file_paths, indent=2)}
+
+        Create a detailed, actionable enhancement plan that:
+        1. Has a clear title and description centered on enhancing {primary_focus}
+        2. Lists specific changes to implement, all related to {primary_focus} and adhering to the design approach: {design_approach}
+        3. ONLY includes file modifications for files in the list of actual UI files above
+        4. For each file to modify, include:
+           - File path (exactly as it appears in the list above)
+           - Enhancement type (specific to {primary_focus})
+           - Specific changes to make, ensuring consistency with the design approach
+           - Expected impact on {primary_focus}
+
+        If {primary_focus} requires global changes (e.g., color scheme or typography), include steps to define these globally (e.g., in a CSS file or theme configuration) and reference them in individual files.
+        Ensure all changes are consistent and cohesive across all modified files, following the proposed design approach.
+
+        Return your plan as a structured JSON object with:
+        - title: A descriptive title focused on {primary_focus}
+        - description: Overall plan description emphasizing {primary_focus} and the design approach
+        - changes: Array of high-level changes related to {primary_focus}
+        - file_modifications: Array of specific file changes with details, all tied to {primary_focus}
+        """
+
+        plan_result = llm.invoke([HumanMessage(content=plan_prompt)])
+
+        # Extract JSON from the response
+        import re
+        json_match = re.search(r'```json\n(.*?)\n```', plan_result.content, re.DOTALL)
+        if json_match:
+            plan_json = json_match.group(1)
+        else:
+            try:
+                plan = json.loads(plan_result.content)
+                plan_json = json.dumps(plan)
+            except:
+                plan_json = generate_enhancement_plan.invoke({
+                    "opportunities_json": opportunities_json
+                })
+
+        try:
+            enhancement_plan = json.loads(plan_json)
+            files_to_enhance = []
+            for file_mod in enhancement_plan.get("file_modifications", []):
+                file_path = file_mod.get("file_path", "")
+                full_path = os.path.join(repo_dir, file_path)
+                if os.path.exists(full_path):
+                    files_to_enhance.append({
+                        "path": file_path,
+                        "enhancement_type": file_mod.get("enhancement_type", ""),
+                        "changes": file_mod.get("changes", ""),
+                        "impact": file_mod.get("impact", "")
+                    })
+                    print(f"Verified file exists: {file_path}")
+                else:
+                    print(f"WARNING: File does not exist: {file_path} - This file will be skipped")
+
+            log_messages = [
+                log_message,
+                f"Plan generated: {enhancement_plan.get('title', 'UI Enhancement Plan')}",
+                f"Changes planned: {len(enhancement_plan.get('changes', []))}",
+                f"Files to modify: {len(files_to_enhance)} (after verification)"
+            ]
+
+            print("\n".join(log_messages))
+
+            return {
+                **state,
+                "enhancement_plan": enhancement_plan,
+                "files_to_enhance": files_to_enhance,
+                "current_file_index": 0,
+                "enhanced_files": [],
+                "phase": Phase.IMPLEMENT_ENHANCEMENTS if files_to_enhance else Phase.SUMMARIZE,
+                "log": state.get("log", []) + log_messages
+            }
+        except Exception as e:
+            error_message = f"Error parsing plan JSON: {e}"
+            print(error_message)
+            return {
+                **state,
+                "error": error_message,
+                "phase": Phase.COMPLETE,
+                "log": state.get("log", []) + [log_message, error_message]
+            }
+    except Exception as e:
+        error_message = f"Error in generate_plan: {e}"
+        print(error_message)
+        return {
+            **state,
+            "error": str(e),
+            "phase": Phase.COMPLETE,
+            "log": state.get("log", []) + [error_message]
+        }
+
+
+def implement_enhancements(state: State) -> State:
+    try:
+        repo_dir = state["repo_dir"]
+        files_to_enhance = state["files_to_enhance"]
+        current_index = state["current_file_index"]
+        enhanced_files = state.get("enhanced_files", [])
+        ui_analysis = state.get("ui_analysis", {})
+
+        if current_index >= len(files_to_enhance):
+            log_message = f"All {len(enhanced_files)} files enhanced successfully"
+            print(log_message)
+            return {
+                **state,
+                "phase": Phase.VERIFY_CHANGES,
+                "log": state.get("log", []) + [log_message]
+            }
+
+        file_info = files_to_enhance[current_index]
+        file_path = file_info["path"]
+        enhancement_type = file_info["enhancement_type"]
+        planned_changes = file_info["changes"]
+
+        log_message = f"Enhancing file {current_index + 1}/{len(files_to_enhance)}: {file_path}"
+        print(log_message)
+
+        try:
+            full_path = os.path.join(repo_dir, file_path)
+            if not os.path.exists(full_path):
+                error_message = f"File {file_path} does not exist - skipping"
+                print(error_message)
+                return {
+                    **state,
+                    "current_file_index": current_index + 1,
+                    "log": state.get("log", []) + [log_message, error_message]
+                }
+
+            original_content = get_file_content.invoke({
+                "repo_dir": repo_dir,
+                "relative_path": file_path
+            })
+
+            if original_content.startswith("Error reading file"):
+                error_message = f"Failed to read {file_path}: {original_content}"
+                print(error_message)
+                return {
+                    **state,
+                    "current_file_index": current_index + 1,
+                    "log": state.get("log", []) + [log_message, error_message]
+                }
+
+            framework_info = f"Framework: {', '.join(ui_analysis.get('framework', {}).get('detected', ['Unknown']))}"
+            libraries_info = f"UI Libraries: {', '.join(ui_analysis.get('ui_libraries', {}).get('detected', ['None detected']))}"
+
+            enhancement_prompt = f"""
+            You are a UI/UX expert enhancing a React and Astro web application file.
+
+            {framework_info}
+            {libraries_info}
+
+            File path: {file_path}
+
+            Original file content:
+            ```
+            {original_content}
+            ```
+
+            Enhancement type: {enhancement_type}
+
+            Planned changes:
+            {planned_changes}
+
+            Create an enhanced version of this file that:
+            1. Implements the planned changes
+            2. Maintains all original functionality
+            3. Uses best practices for the file type
+            4. Makes visually noticeable improvements
+            5. PRESERVES all important original code structures and functionality
+
+            Return ONLY the complete enhanced file content without any explanation.
+            Do not include markdown code blocks or any explanatory text - your output will be directly written to the file.
+            """
+            file_ext = os.path.splitext(file_path)[1].lower()
+
+            if file_ext == '.astro':
+                enhancement_prompt += """
+                IMPORTANT CONSTRAINTS FOR ASTRO FILES:
+                1. DO NOT add client:load or ANY client hydration directives
+                2. ONLY modify the <style> section for visual improvements
+                3. Keep all frontmatter (between --- tags) unchanged
+                4. Use vanilla <script> tags for minimal interactivity
+                5. TEST YOUR SYNTAX - ensure all tags and braces match
+                """
+            elif file_ext == '.js':
+                enhancement_prompt += """
+                IMPORTANT CONSTRAINTS FOR JAVASCRIPT:
+                1. Ensure all parentheses in if-statements are balanced - if (condition) { ... }
+                2. Double-check all bracket pairs {} [] ()
+                3. All if/for/while statements must have complete syntax
+                4. DO NOT change core function signatures or exports
+                5. Focus on readability and performance improvements only
+                """
+
+            enhancement_result = llm.invoke([HumanMessage(content=enhancement_prompt)])
+            enhanced_content = enhancement_result.content
+
+            import re
+            code_block_match = re.search(r'```(?:\w+)?\n(.*?)\n```', enhanced_content, re.DOTALL)
+            if code_block_match:
+                enhanced_content = code_block_match.group(1)
+                print(f"Extracted code from markdown code block")
+
+            print(f"Enhanced content type: {type(enhanced_content)}, length: {len(enhanced_content)}")
+            print(f"First 50 chars of enhanced content: {enhanced_content[:50]}")
+
+            modification_result = modify_ui_file.invoke({
+                "repo_dir": repo_dir,
+                "file_path": file_path,
+                "enhancement_type": enhancement_type,
+                "enhanced_content": enhanced_content
+            })
+
+            try:
+                modification_data = json.loads(modification_result)
+                success = modification_data.get("success", False)
+
+                if success:
+                    print(f"Successfully enhanced {file_path}")
+                    enhanced_files.append({
+                        "path": file_path,
+                        "enhancement_type": enhancement_type,
+                        "success": True
+                    })
+                else:
+                    error = modification_data.get("error", "Unknown error")
+                    print(f"Failed to enhance {file_path}: {error}")
+                    enhanced_files.append({
+                        "path": file_path,
+                        "enhancement_type": enhancement_type,
+                        "success": False,
+                        "error": error
+                    })
+
+                return {
+                    **state,
+                    "current_file_index": current_index + 1,
+                    "enhanced_files": enhanced_files,
+                    "phase": Phase.IMPLEMENT_ENHANCEMENTS,
+                    "log": state.get("log", []) + [log_message,
+                                                   f"{'Successfully enhanced' if success else 'Failed to enhance'} {file_path}"]
+                }
+            except Exception as e:
+                log_messages = [log_message, f"Error processing modification result: {e}"]
+                print("\n".join(log_messages))
+                return {
+                    **state,
+                    "current_file_index": current_index + 1,
+                    "enhanced_files": enhanced_files,
+                    "phase": Phase.IMPLEMENT_ENHANCEMENTS,
+                    "log": state.get("log", []) + log_messages
+                }
+        except Exception as e:
+            log_messages = [log_message, f"Error enhancing file {file_path}: {e}"]
+            print("\n".join(log_messages))
+            return {
+                **state,
+                "current_file_index": current_index + 1,
+                "enhanced_files": enhanced_files,
+                "phase": Phase.IMPLEMENT_ENHANCEMENTS,
+                "log": state.get("log", []) + log_messages
+            }
+    except Exception as e:
+        error_message = f"Error in implement_enhancements: {e}"
+        print(error_message)
+        return {
+            **state,
+            "phase": Phase.VERIFY_CHANGES,
+            "log": state.get("log", []) + [error_message]
+        }
+
+
+def verify_changes(state: State) -> State:
+    try:
+        repo_dir = state["repo_dir"]
+        enhanced_files = state.get("enhanced_files", [])
+
+        if not enhanced_files:
+            log_message = "No files were enhanced, skipping verification"
+            print(log_message)
+            return {
+                **state,
+                "phase": Phase.SUMMARIZE,
+                "log": state.get("log", []) + [log_message]
+            }
+
+        log_message = f"Verifying {len(enhanced_files)} enhanced files..."
+        print(log_message)
+
+        modified_files_json = json.dumps({"files": enhanced_files})
+        verification_result = verify_ui_changes.invoke({
+            "repo_dir": repo_dir,
+            "modified_files_json": modified_files_json
+        })
+
+        try:
+            verification_data = json.loads(verification_result)
+            success = verification_data.get("success", True)
+            issues = verification_data.get("potential_issues", [])
+
+            log_messages = [
+                log_message,
+                f"Verification {'successful' if success else 'found issues'}"
+            ]
+
+            if issues:
+                log_messages.append(f"Found {len(issues)} potential issues")
+                files_to_revert = [issue["file"] for issue in issues if "syntax error" in issue.get("issue", "")]
+                if files_to_revert:
+                    revert_result = revert_ui_changes.invoke({
+                        "repo_dir": repo_dir,
+                        "files_to_revert": files_to_revert
+                    })
+                    try:
+                        revert_data = json.loads(revert_result)
+                        reverted = len(revert_data.get("successful_reverts", []))
+                        log_messages.append(f"Reverted {reverted} problematic files")
+                    except:
+                        log_messages.append("Failed to revert problematic files")
+
+            print("\n".join(log_messages))
+
+            return {
+                **state,
+                "verification_result": verification_data,
+                "phase": Phase.SUMMARIZE,
+                "log": state.get("log", []) + log_messages
+            }
+        except Exception as e:
+            log_messages = [log_message, f"Error processing verification result: {e}"]
+            print("\n".join(log_messages))
+            return {
+                **state,
+                "phase": Phase.SUMMARIZE,
+                "log": state.get("log", []) + log_messages
+            }
+    except Exception as e:
+        error_message = f"Error in verify_changes: {e}"
+        print(error_message)
+        return {
+            **state,
+            "phase": Phase.SUMMARIZE,
+            "log": state.get("log", []) + [error_message]
+        }
 
 def create_summary(state: State) -> State:
-    """Create a summary of the enhancements."""
     try:
-        enhanced_components = state.get("enhanced_components", [])
+        enhanced_files = state.get("enhanced_files", [])
+        enhancement_plan = state.get("enhancement_plan", {})
+        verification_result = state.get("verification_result", {})
+        enhancement_prompt = state["enhancement_prompt"]
 
-        # Generate summary text
-        summary = "# UI Enhancement Summary\n\n"
-        summary += f"Enhanced {len(enhanced_components)} UI components:\n\n"
+        log_message = "Creating enhancement summary..."
+        print(log_message)
 
-        for component in enhanced_components:
-            file_path = component["file_path"]
-            success = component.get("success", False)
-            message = component.get("message", "")
+        summary_prompt = f"""
+        You are a UI/UX expert who has just completed enhancements to a web application.
 
-            if success:
-                summary += f"✅ {file_path} - {message}\n"
-            else:
-                summary += f"❌ {file_path} - Failed to enhance\n"
+        Original enhancement directive: "{enhancement_prompt}"
 
-        print(summary)
+        Enhancement plan: {json.dumps(enhancement_plan, indent=2)}
+
+        Enhanced files: {json.dumps(enhanced_files, indent=2)}
+
+        Verification results: {json.dumps(verification_result, indent=2)}
+
+        Create a comprehensive, well-formatted summary of the enhancements that:
+        1. Explains what was accomplished
+        2. Highlights the most significant improvements
+        3. Describes the visual and functional changes
+        4. Notes any issues that were encountered
+
+        Make the summary conversational and engaging, focusing on the value delivered.
+        """
+
+        summary_result = llm.invoke([HumanMessage(content=summary_prompt)])
+        summary = summary_result.content
+
+        print(f"Summary generated successfully")
 
         return {
             **state,
             "summary": summary,
-            "phase": Phase.COMPLETE
+            "phase": Phase.COMPLETE,
+            "log": state.get("log", []) + [log_message, "Summary generated successfully"]
         }
     except Exception as e:
-        print(f"Error in create_summary: {e}")
+        error_message = f"Error in create_summary: {e}"
+        print(error_message)
+        minimal_summary = f"""
+        # UI Enhancement Summary
+
+        Enhanced {len(state.get('enhanced_files', []))} files based on prompt: "{state['enhancement_prompt']}"
+
+        Error occurred during summary generation: {str(e)}
+        """
         return {
             **state,
-            "error": str(e),
-            "phase": Phase.COMPLETE
+            "summary": minimal_summary,
+            "phase": Phase.COMPLETE,
+            "log": state.get("log", []) + [error_message]
         }
 
-
-# Define routing logic
 def get_next_step(state: State) -> str:
     return state["phase"]
 
-
-# Build the workflow
 workflow = StateGraph(State)
 
-# Add nodes
 workflow.add_node(Phase.CLONE_REPO, clone_repository)
-workflow.add_node(Phase.SCAN_CODEBASE, scan_for_components)
-workflow.add_node(Phase.ANALYZE_COMPONENTS, analyze_and_enhance_component)
+workflow.add_node(Phase.SCAN_UI_FILES, scan_ui_files)
+workflow.add_node(Phase.ANALYZE_UI, analyze_ui)
+workflow.add_node(Phase.IDENTIFY_OPPORTUNITIES, identify_opportunities)
+workflow.add_node(Phase.GENERATE_PLAN, generate_plan)
+workflow.add_node(Phase.IMPLEMENT_ENHANCEMENTS, implement_enhancements)
+workflow.add_node(Phase.VERIFY_CHANGES, verify_changes)
 workflow.add_node(Phase.SUMMARIZE, create_summary)
 
-# Add conditional edges
 workflow.add_conditional_edges(
     Phase.CLONE_REPO,
     get_next_step,
-    {
-        Phase.SCAN_CODEBASE: Phase.SCAN_CODEBASE,
-        Phase.COMPLETE: END
-    }
+    {Phase.SCAN_UI_FILES: Phase.SCAN_UI_FILES, Phase.COMPLETE: END}
 )
 
 workflow.add_conditional_edges(
-    Phase.SCAN_CODEBASE,
+    Phase.SCAN_UI_FILES,
     get_next_step,
-    {
-        Phase.ANALYZE_COMPONENTS: Phase.ANALYZE_COMPONENTS,
-        Phase.SUMMARIZE: Phase.SUMMARIZE,
-        Phase.COMPLETE: END
-    }
+    {Phase.ANALYZE_UI: Phase.ANALYZE_UI, Phase.COMPLETE: END}
 )
 
 workflow.add_conditional_edges(
-    Phase.ANALYZE_COMPONENTS,
+    Phase.ANALYZE_UI,
     get_next_step,
-    {
-        Phase.ANALYZE_COMPONENTS: Phase.ANALYZE_COMPONENTS,
-        Phase.SUMMARIZE: Phase.SUMMARIZE,
-        Phase.COMPLETE: END
-    }
+    {Phase.IDENTIFY_OPPORTUNITIES: Phase.IDENTIFY_OPPORTUNITIES, Phase.COMPLETE: END}
+)
+
+workflow.add_conditional_edges(
+    Phase.IDENTIFY_OPPORTUNITIES,
+    get_next_step,
+    {Phase.GENERATE_PLAN: Phase.GENERATE_PLAN, Phase.COMPLETE: END}
+)
+
+workflow.add_conditional_edges(
+    Phase.GENERATE_PLAN,
+    get_next_step,
+    {Phase.IMPLEMENT_ENHANCEMENTS: Phase.IMPLEMENT_ENHANCEMENTS, Phase.SUMMARIZE: Phase.SUMMARIZE, Phase.COMPLETE: END}
+)
+
+workflow.add_conditional_edges(
+    Phase.IMPLEMENT_ENHANCEMENTS,
+    get_next_step,
+    {Phase.IMPLEMENT_ENHANCEMENTS: Phase.IMPLEMENT_ENHANCEMENTS, Phase.VERIFY_CHANGES: Phase.VERIFY_CHANGES,
+     Phase.COMPLETE: END}
+)
+
+workflow.add_conditional_edges(
+    Phase.VERIFY_CHANGES,
+    get_next_step,
+    {Phase.SUMMARIZE: Phase.SUMMARIZE, Phase.COMPLETE: END}
 )
 
 workflow.add_conditional_edges(
     Phase.SUMMARIZE,
     get_next_step,
-    {
-        Phase.COMPLETE: END
-    }
+    {Phase.COMPLETE: END}
 )
 
-# Set entry point
 workflow.set_entry_point(Phase.CLONE_REPO)
-
-# Compile the graph
 agent = workflow.compile()
 
 
-# Function to run the agent
-def enhance_ui(repo_url: str) -> Dict[str, Any]:
-    """
-    Enhance UI components in a repository.
-
-    Args:
-        repo_url (str): Repository URL
-
-    Returns:
-        dict: The final state with summary of changes
-    """
+def enhance_ui(repo_url: str, enhancement_prompt: str = "Enhance the UI") -> Dict[str, Any]:
     print(f"Starting UI enhancement for: {repo_url}")
+    print(f"Enhancement prompt: {enhancement_prompt}")
 
-    # Initial state
     initial_state = {
         "phase": Phase.CLONE_REPO,
+        "enhancement_prompt": enhancement_prompt,
         "repo_url": repo_url,
         "repo_dir": "",
-        "components": [],
-        "current_component_index": 0,
-        "enhanced_components": [],
+        "ui_files": {},
+        "ui_analysis": {},
+        "primary_focus": "",
+        "design_approach": "",
+        "enhancement_opportunities": {},
+        "enhancement_plan": {},
+        "files_to_enhance": [],
+        "current_file_index": 0,
+        "enhanced_files": [],
+        "verification_result": {},
         "summary": "",
-        "error": None
+        "error": None,
+        "log": []
     }
 
-    # Run the agent
     try:
         result = agent.invoke(initial_state)
         return result
