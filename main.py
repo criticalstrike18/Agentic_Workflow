@@ -1,62 +1,42 @@
-# main.py (Revised)
+# simplified_main.py
 import os
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
 
-from agent import agent_executor
+from agent import enhance_ui
 
 
 def main():
-    """Main entry point for the application."""
+    """Main entry point for autonomous UI enhancement."""
     load_dotenv()
 
     repo_url = os.getenv('REPO_URL')
-    target_dir = os.getenv('TARGET_DIR')
-    # Ensure TARGET_DIR is an absolute path or resolve it
-    if target_dir and not os.path.isabs(target_dir):
-        target_dir = os.path.abspath(target_dir)
-
     if not repo_url:
-        raise ValueError("REPO_URL must be set in the .env file")
-    if not target_dir:
-        raise ValueError("TARGET_DIR must be set in the .env file")
-
-    # Make sure the parent directory for target_dir exists if possible
-    target_parent = os.path.dirname(target_dir)
-    if target_parent:
-        os.makedirs(target_parent, exist_ok=True)
-
-    print(f"Attempting to clone '{repo_url}' into '{target_dir}'")
+        repo_url = input("Enter GitHub repository URL: ")
 
     try:
-        # Use the modern invoke method with a dictionary input
-        prompt = f"Clone the repository from '{repo_url}' to '{target_dir}'"
-        # Maintain chat history for context (optional but good practice)
-        chat_history = []
-        result = agent_executor.invoke({
-            "input": prompt,
-            "chat_history": chat_history  # Start with empty history
-        })
+        # Execute the agent
+        result = enhance_ui(repo_url)
 
-        print(f"Agent Result:\n{result['output']}")
+        # Print summary
+        if "error" in result and result["error"]:
+            print(f"\n❌ Error during processing: {result['error']}")
 
-        # Example follow-up:
-        print("\nAttempting to list directory tree...")
-        # Add previous interaction to history
-        chat_history.append(HumanMessage(content=prompt))
-        chat_history.append(result['output'])  # Or AIMessage(content=result['output'])
+        if "summary" in result and result["summary"]:
+            print(f"\n{result['summary']}")
 
-        follow_up_prompt = f"List the directory tree for the cloned repository at '{target_dir}'"
-        result_tree = agent_executor.invoke({
-            "input": follow_up_prompt,
-            "chat_history": chat_history
-        })
-        print(f"Agent Result:\n{result_tree['output']}")
+        # Show where to find the changes
+        target_dir = os.getenv('TARGET_DIR', './enhanced_repo')
+        if not os.path.isabs(target_dir):
+            target_dir = os.path.abspath(target_dir)
 
+        print(f"\nYou can view the enhanced repository at: {target_dir}")
+        print(f"Original files were backed up with the .bak extension.")
 
+    except KeyboardInterrupt:
+        print("\n\nProcess aborted by user.")
     except Exception as e:
-        print(f"Error executing agent: {e}")
+        print(f"\n\nError during UI enhancement process: {e}")
 
 
 if __name__ == "__main__":
