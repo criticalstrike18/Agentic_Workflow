@@ -1,16 +1,15 @@
 import json
 import os
 from enum import Enum
-from typing import Dict, List, Any, Optional, TypedDict
+from typing import Dict, List, Any, Optional, TypedDict, cast
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
-# Import base tools
-from tools import git_clone, get_directory_tree, get_file_content, scan_for_ui_files, analyze_ui_capabilities, \
-    identify_enhancement_opportunities, generate_enhancement_plan, modify_ui_file, verify_ui_changes, revert_ui_changes
+# Import tools as t
+import tools as t
 
 # Load environment variables
 load_dotenv()
@@ -32,6 +31,7 @@ llm = ChatOpenAI(
     temperature=0.4
 )
 
+
 # Define phases for the workflow
 class Phase(str, Enum):
     CLONE_REPO = "clone_repo"
@@ -45,8 +45,8 @@ class Phase(str, Enum):
     COMPLETE = "complete"
 
 
-# Define a state type
-class State(TypedDict):
+# Define a state type with total=False to make all fields optional
+class State(TypedDict, total=False):
     phase: str
     enhancement_prompt: str
     repo_url: str
@@ -65,10 +65,39 @@ class State(TypedDict):
     error: Optional[str]
     log: List[str]
 
+
+# Helper function to ensure all required state fields are present
+def ensure_complete_state(state: State) -> State:
+    # Default values for all required fields
+    default_state: State = {
+        "phase": Phase.CLONE_REPO,
+        "enhancement_prompt": "",
+        "repo_url": "",
+        "repo_dir": "",
+        "ui_files": {},
+        "ui_analysis": {},
+        "primary_focus": "",
+        "design_approach": "",
+        "enhancement_opportunities": {},
+        "enhancement_plan": {},
+        "files_to_enhance": [],
+        "current_file_index": 0,
+        "enhanced_files": [],
+        "verification_result": {},
+        "summary": "",
+        "error": None,
+        "log": []
+    }
+
+    # Merge the provided state with defaults
+    complete_state = {**default_state, **state}
+    return cast(State, complete_state)
+
+
 # Define the node functions
 def clone_repository(state: State) -> State:
     try:
-        repo_url = state["repo_url"]
+        repo_url = state.get("repo_url", "")
         target_dir = os.getenv('TARGET_DIR', './enhanced_repo')
         if not os.path.isabs(target_dir):
             target_dir = os.path.abspath(target_dir)
@@ -76,36 +105,39 @@ def clone_repository(state: State) -> State:
         log_message = f"Cloning repository: {repo_url} to {target_dir}"
         print(log_message)
 
-        result = git_clone.invoke({"repo_url": repo_url, "target_dir": target_dir})
+        result = t.git_clone.invoke({"repo_url": repo_url, "target_dir": target_dir})
         print(f"Clone result: {result}")
 
         new_log = state.get("log", []) + [log_message, f"Clone complete: {result}"]
 
-        return {
+        updated_state = {
             **state,
             "repo_dir": target_dir,
             "phase": Phase.SCAN_UI_FILES,
             "log": new_log
         }
+        return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in clone_repository: {e}"
         print(error_message)
-        return {
+        updated_state = {
             **state,
             "error": str(e),
             "phase": Phase.COMPLETE,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
 
 
 def scan_ui_files(state: State) -> State:
     try:
-        repo_dir = state["repo_dir"]
+        repo_dir = state.get("repo_dir", "")
         log_message = f"Scanning for UI files in: {repo_dir}"
         print(log_message)
 
-        directory_structure = get_directory_tree.invoke({"root_dir": repo_dir})
-        scan_result = scan_for_ui_files.invoke({"repo_dir": repo_dir})
+        # Get directory tree, but we don't need to use it directly
+        t.get_directory_tree.invoke({"root_dir": repo_dir})  # Just invoke but don't store result
+        scan_result = t.scan_for_ui_files.invoke({"repo_dir": repo_dir})
         ui_files = json.loads(scan_result)
 
         total_files = ui_files.get("summary", {}).get("total_files", 0)
@@ -120,33 +152,36 @@ def scan_ui_files(state: State) -> State:
 
         print("\n".join(log_messages))
 
-        return {
+        updated_state = {
             **state,
             "ui_files": ui_files,
             "phase": Phase.ANALYZE_UI if total_files > 0 else Phase.COMPLETE,
             "log": state.get("log", []) + log_messages,
             "error": None if total_files > 0 else "No UI files found"
         }
+        return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in scan_ui_files: {e}"
         print(error_message)
-        return {
+        updated_state = {
             **state,
             "error": str(e),
             "phase": Phase.COMPLETE,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
 
 
 def analyze_ui(state: State) -> State:
     try:
-        repo_dir = state["repo_dir"]
-        ui_files_json = json.dumps(state["ui_files"])
+        repo_dir = state.get("repo_dir", "")
+        ui_files = state.get("ui_files", {})
+        ui_files_json = json.dumps(ui_files)
 
         log_message = "Analyzing UI capabilities..."
         print(log_message)
 
-        analysis_result = analyze_ui_capabilities.invoke({
+        analysis_result = t.analyze_ui_capabilities.invoke({
             "repo_dir": repo_dir,
             "ui_files_json": ui_files_json
         })
@@ -169,28 +204,31 @@ def analyze_ui(state: State) -> State:
 
         print("\n".join(log_messages))
 
-        return {
+        updated_state = {
             **state,
             "ui_analysis": ui_analysis,
             "phase": Phase.IDENTIFY_OPPORTUNITIES,
             "log": state.get("log", []) + log_messages
         }
+        return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in analyze_ui: {e}"
         print(error_message)
-        return {
+        updated_state = {
             **state,
             "error": str(e),
             "phase": Phase.COMPLETE,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
 
 
 def identify_opportunities(state: State) -> State:
     try:
-        enhancement_prompt = state["enhancement_prompt"]
-        ui_analysis_json = json.dumps(state["ui_analysis"])
-        repo_dir = state["repo_dir"]
+        enhancement_prompt = state.get("enhancement_prompt", "")
+        ui_analysis = state.get("ui_analysis", {})
+        ui_analysis_json = json.dumps(ui_analysis)
+        repo_dir = state.get("repo_dir", "")
 
         log_message = f"Identifying enhancement opportunities based on: '{enhancement_prompt}'"
         print(log_message)
@@ -268,7 +306,7 @@ def identify_opportunities(state: State) -> State:
                 opportunities = json.loads(refinement_result.content)
                 opportunities_json = json.dumps(opportunities)
             except:
-                opportunities_result = identify_enhancement_opportunities.invoke({
+                opportunities_result = t.identify_enhancement_opportunities.invoke({
                     "repo_dir": repo_dir,
                     "ui_analysis_json": ui_analysis_json
                 })
@@ -292,7 +330,7 @@ def identify_opportunities(state: State) -> State:
 
             print("\n".join(log_messages))
 
-            return {
+            updated_state = {
                 **state,
                 "primary_focus": primary_focus,
                 "design_approach": design_approach,
@@ -300,39 +338,44 @@ def identify_opportunities(state: State) -> State:
                 "phase": Phase.GENERATE_PLAN,
                 "log": state.get("log", []) + log_messages
             }
+            return ensure_complete_state(updated_state)
         except Exception as e:
             error_message = f"Error parsing opportunities JSON: {e}"
             print(error_message)
-            return {
+            updated_state = {
                 **state,
                 "error": error_message,
                 "phase": Phase.COMPLETE,
                 "log": state.get("log", []) + [log_message, error_message]
             }
+            return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in identify_opportunities: {e}"
         print(error_message)
-        return {
+        updated_state = {
             **state,
             "error": str(e),
             "phase": Phase.COMPLETE,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
 
 
 def generate_plan(state: State) -> State:
     try:
-        enhancement_prompt = state["enhancement_prompt"]
-        primary_focus = state["primary_focus"]
-        design_approach = state["design_approach"]
-        opportunities_json = json.dumps(state["enhancement_opportunities"])
-        ui_analysis_json = json.dumps(state["ui_analysis"])
-        repo_dir = state["repo_dir"]
+        enhancement_prompt = state.get("enhancement_prompt", "")
+        primary_focus = state.get("primary_focus", "")
+        design_approach = state.get("design_approach", "")
+        enhancement_opportunities = state.get("enhancement_opportunities", {})
+        opportunities_json = json.dumps(enhancement_opportunities)
+        ui_analysis = state.get("ui_analysis", {})
+        ui_analysis_json = json.dumps(ui_analysis)
+        repo_dir = state.get("repo_dir", "")
 
         log_message = "Generating detailed enhancement plan..."
         print(log_message)
 
-        ui_files = state["ui_files"]
+        ui_files = state.get("ui_files", {})
         all_ui_files = []
         for category, files in ui_files.get("ui_files", {}).items():
             all_ui_files.extend(files)
@@ -390,7 +433,7 @@ def generate_plan(state: State) -> State:
                 plan = json.loads(plan_result.content)
                 plan_json = json.dumps(plan)
             except:
-                plan_json = generate_enhancement_plan.invoke({
+                plan_json = t.generate_enhancement_plan.invoke({
                     "opportunities_json": opportunities_json
                 })
 
@@ -420,7 +463,7 @@ def generate_plan(state: State) -> State:
 
             print("\n".join(log_messages))
 
-            return {
+            updated_state = {
                 **state,
                 "enhancement_plan": enhancement_plan,
                 "files_to_enhance": files_to_enhance,
@@ -429,42 +472,46 @@ def generate_plan(state: State) -> State:
                 "phase": Phase.IMPLEMENT_ENHANCEMENTS if files_to_enhance else Phase.SUMMARIZE,
                 "log": state.get("log", []) + log_messages
             }
+            return ensure_complete_state(updated_state)
         except Exception as e:
             error_message = f"Error parsing plan JSON: {e}"
             print(error_message)
-            return {
+            updated_state = {
                 **state,
                 "error": error_message,
                 "phase": Phase.COMPLETE,
                 "log": state.get("log", []) + [log_message, error_message]
             }
+            return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in generate_plan: {e}"
         print(error_message)
-        return {
+        updated_state = {
             **state,
             "error": str(e),
             "phase": Phase.COMPLETE,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
 
 
 def implement_enhancements(state: State) -> State:
     try:
-        repo_dir = state["repo_dir"]
-        files_to_enhance = state["files_to_enhance"]
-        current_index = state["current_file_index"]
+        repo_dir = state.get("repo_dir", "")
+        files_to_enhance = state.get("files_to_enhance", [])
+        current_index = state.get("current_file_index", 0)
         enhanced_files = state.get("enhanced_files", [])
         ui_analysis = state.get("ui_analysis", {})
 
         if current_index >= len(files_to_enhance):
             log_message = f"All {len(enhanced_files)} files enhanced successfully"
             print(log_message)
-            return {
+            updated_state = {
                 **state,
                 "phase": Phase.VERIFY_CHANGES,
                 "log": state.get("log", []) + [log_message]
             }
+            return ensure_complete_state(updated_state)
 
         file_info = files_to_enhance[current_index]
         file_path = file_info["path"]
@@ -479,13 +526,14 @@ def implement_enhancements(state: State) -> State:
             if not os.path.exists(full_path):
                 error_message = f"File {file_path} does not exist - skipping"
                 print(error_message)
-                return {
+                updated_state = {
                     **state,
                     "current_file_index": current_index + 1,
                     "log": state.get("log", []) + [log_message, error_message]
                 }
+                return ensure_complete_state(updated_state)
 
-            original_content = get_file_content.invoke({
+            original_content = t.get_file_content.invoke({
                 "repo_dir": repo_dir,
                 "relative_path": file_path
             })
@@ -493,11 +541,12 @@ def implement_enhancements(state: State) -> State:
             if original_content.startswith("Error reading file"):
                 error_message = f"Failed to read {file_path}: {original_content}"
                 print(error_message)
-                return {
+                updated_state = {
                     **state,
                     "current_file_index": current_index + 1,
                     "log": state.get("log", []) + [log_message, error_message]
                 }
+                return ensure_complete_state(updated_state)
 
             framework_info = f"Framework: {', '.join(ui_analysis.get('framework', {}).get('detected', ['Unknown']))}"
             libraries_info = f"UI Libraries: {', '.join(ui_analysis.get('ui_libraries', {}).get('detected', ['None detected']))}"
@@ -563,7 +612,7 @@ def implement_enhancements(state: State) -> State:
             print(f"Enhanced content type: {type(enhanced_content)}, length: {len(enhanced_content)}")
             print(f"First 50 chars of enhanced content: {enhanced_content[:50]}")
 
-            modification_result = modify_ui_file.invoke({
+            modification_result = t.modify_ui_file.invoke({
                 "repo_dir": repo_dir,
                 "file_path": file_path,
                 "enhancement_type": enhancement_type,
@@ -591,7 +640,7 @@ def implement_enhancements(state: State) -> State:
                         "error": error
                     })
 
-                return {
+                updated_state = {
                     **state,
                     "current_file_index": current_index + 1,
                     "enhanced_files": enhanced_files,
@@ -599,55 +648,60 @@ def implement_enhancements(state: State) -> State:
                     "log": state.get("log", []) + [log_message,
                                                    f"{'Successfully enhanced' if success else 'Failed to enhance'} {file_path}"]
                 }
+                return ensure_complete_state(updated_state)
             except Exception as e:
                 log_messages = [log_message, f"Error processing modification result: {e}"]
                 print("\n".join(log_messages))
-                return {
+                updated_state = {
                     **state,
                     "current_file_index": current_index + 1,
                     "enhanced_files": enhanced_files,
                     "phase": Phase.IMPLEMENT_ENHANCEMENTS,
                     "log": state.get("log", []) + log_messages
                 }
+                return ensure_complete_state(updated_state)
         except Exception as e:
             log_messages = [log_message, f"Error enhancing file {file_path}: {e}"]
             print("\n".join(log_messages))
-            return {
+            updated_state = {
                 **state,
                 "current_file_index": current_index + 1,
                 "enhanced_files": enhanced_files,
                 "phase": Phase.IMPLEMENT_ENHANCEMENTS,
                 "log": state.get("log", []) + log_messages
             }
+            return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in implement_enhancements: {e}"
         print(error_message)
-        return {
+        updated_state = {
             **state,
             "phase": Phase.VERIFY_CHANGES,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
 
 
 def verify_changes(state: State) -> State:
     try:
-        repo_dir = state["repo_dir"]
+        repo_dir = state.get("repo_dir", "")
         enhanced_files = state.get("enhanced_files", [])
 
         if not enhanced_files:
             log_message = "No files were enhanced, skipping verification"
             print(log_message)
-            return {
+            updated_state = {
                 **state,
                 "phase": Phase.SUMMARIZE,
                 "log": state.get("log", []) + [log_message]
             }
+            return ensure_complete_state(updated_state)
 
         log_message = f"Verifying {len(enhanced_files)} enhanced files..."
         print(log_message)
 
         modified_files_json = json.dumps({"files": enhanced_files})
-        verification_result = verify_ui_changes.invoke({
+        verification_result = t.verify_ui_changes.invoke({
             "repo_dir": repo_dir,
             "modified_files_json": modified_files_json
         })
@@ -664,9 +718,10 @@ def verify_changes(state: State) -> State:
 
             if issues:
                 log_messages.append(f"Found {len(issues)} potential issues")
-                files_to_revert = [issue["file"] for issue in issues if "syntax error" in issue.get("issue", "")]
+                files_to_revert = [issue["file"] for issue in issues if
+                                   "syntax error" in issue.get("issue", "").lower()]
                 if files_to_revert:
-                    revert_result = revert_ui_changes.invoke({
+                    revert_result = t.revert_ui_changes.invoke({
                         "repo_dir": repo_dir,
                         "files_to_revert": files_to_revert
                     })
@@ -674,40 +729,44 @@ def verify_changes(state: State) -> State:
                         revert_data = json.loads(revert_result)
                         reverted = len(revert_data.get("successful_reverts", []))
                         log_messages.append(f"Reverted {reverted} problematic files")
-                    except:
-                        log_messages.append("Failed to revert problematic files")
+                    except Exception as e:
+                        log_messages.append(f"Failed to revert problematic files: {str(e)}")
 
             print("\n".join(log_messages))
 
-            return {
+            updated_state = {
                 **state,
                 "verification_result": verification_data,
                 "phase": Phase.SUMMARIZE,
                 "log": state.get("log", []) + log_messages
             }
+            return ensure_complete_state(updated_state)
         except Exception as e:
             log_messages = [log_message, f"Error processing verification result: {e}"]
             print("\n".join(log_messages))
-            return {
+            updated_state = {
                 **state,
                 "phase": Phase.SUMMARIZE,
                 "log": state.get("log", []) + log_messages
             }
+            return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in verify_changes: {e}"
         print(error_message)
-        return {
+        updated_state = {
             **state,
             "phase": Phase.SUMMARIZE,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
+
 
 def create_summary(state: State) -> State:
     try:
         enhanced_files = state.get("enhanced_files", [])
         enhancement_plan = state.get("enhancement_plan", {})
         verification_result = state.get("verification_result", {})
-        enhancement_prompt = state["enhancement_prompt"]
+        enhancement_prompt = state.get("enhancement_prompt", "")
 
         log_message = "Creating enhancement summary..."
         print(log_message)
@@ -737,31 +796,35 @@ def create_summary(state: State) -> State:
 
         print(f"Summary generated successfully")
 
-        return {
+        updated_state = {
             **state,
             "summary": summary,
             "phase": Phase.COMPLETE,
             "log": state.get("log", []) + [log_message, "Summary generated successfully"]
         }
+        return ensure_complete_state(updated_state)
     except Exception as e:
         error_message = f"Error in create_summary: {e}"
         print(error_message)
         minimal_summary = f"""
         # UI Enhancement Summary
 
-        Enhanced {len(state.get('enhanced_files', []))} files based on prompt: "{state['enhancement_prompt']}"
+        Enhanced {len(state.get('enhanced_files', []))} files based on prompt: "{state.get('enhancement_prompt', '')}"
 
         Error occurred during summary generation: {str(e)}
         """
-        return {
+        updated_state = {
             **state,
             "summary": minimal_summary,
             "phase": Phase.COMPLETE,
             "log": state.get("log", []) + [error_message]
         }
+        return ensure_complete_state(updated_state)
+
 
 def get_next_step(state: State) -> str:
-    return state["phase"]
+    return state.get("phase", Phase.COMPLETE)
+
 
 workflow = StateGraph(State)
 
