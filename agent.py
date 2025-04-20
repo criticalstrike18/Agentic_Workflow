@@ -9,17 +9,8 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
 # Import base tools
-from tools import git_clone, get_directory_tree, get_file_content
-# Import UI enhancement tools
-from tools.ui_tools import (
-    scan_for_ui_files,
-    analyze_ui_capabilities,
-    identify_enhancement_opportunities,
-    generate_enhancement_plan,
-    modify_ui_file,
-    verify_ui_changes,
-    revert_ui_changes
-)
+from tools import git_clone, get_directory_tree, get_file_content, scan_for_ui_files, analyze_ui_capabilities, \
+    identify_enhancement_opportunities, generate_enhancement_plan, modify_ui_file, verify_ui_changes, revert_ui_changes
 
 # Load environment variables
 load_dotenv()
@@ -38,7 +29,7 @@ llm = ChatOpenAI(
     openai_api_key=deepseek_api_key,
     openai_api_base=deepseek_api_base,
     model_name=model_name,
-    temperature=0.2
+    temperature=0.4
 )
 
 # Define phases for the workflow
